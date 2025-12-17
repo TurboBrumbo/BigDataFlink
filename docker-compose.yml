@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: bigdataFlink
+      POSTGRES_USER: bigdata
+      POSTGRES_PASSWORD: bddb
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./postgres:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bigdata -d bigdataFlink"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  flink-jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bigdataflink-flink-jobmanager-1
+    ports:
+      - "8081:8081"
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+    volumes:
+      - ./flink:/flink
+      - ./jars:/opt/flink/usrlib
+    command: jobmanager
+
+  flink-taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bigdataflink-flink-taskmanager-1
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    volumes:
+      - ./flink:/flink
+      - ./jars:/opt/flink/usrlib
+    command: taskmanager
+
+  producer:
+    build: .
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      KAFKA_TOPIC: "sales"
+      CSV_GLOB: "/data/MOCK_DATA*.csv"
+    volumes:
+      - ./producer:/producer
+      - ./data:/data
+    command: ["python", "/producer/csv_to_kafka.py"]
+    restart: on-failure
+
+volumes:
+  pgdata:
